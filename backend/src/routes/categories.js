@@ -1,44 +1,63 @@
 import { Router } from 'express';
-import { query, get, run } from '../db.js';
+import { h, listColl, getDoc, createDoc, updateDoc, deleteDoc, whereEq } from '../fs.js';
 import { authRequired, adminRequired } from '../middleware/auth.js';
 
 const router = Router();
 
-router.get('/', authRequired, (req, res) => {
-  res.json(query('SELECT * FROM categories ORDER BY name'));
-});
+router.get(
+  '/',
+  authRequired,
+  h(async (_req, res) => {
+    const rows = await listColl('categories');
+    rows.sort((a, b) => a.name.localeCompare(b.name));
+    res.json(rows);
+  })
+);
 
-router.post('/', authRequired, adminRequired, (req, res) => {
-  const name = (req.body?.name || '').trim();
-  if (!name) return res.status(400).json({ error: 'El nombre es obligatorio' });
-  try {
-    const { id } = run('INSERT INTO categories (name) VALUES (?)', [name]);
-    res.status(201).json(get('SELECT * FROM categories WHERE id = ?', [id]));
-  } catch {
-    res.status(409).json({ error: 'Ya existe una categoria con ese nombre' });
-  }
-});
+router.post(
+  '/',
+  authRequired,
+  adminRequired,
+  h(async (req, res) => {
+    const name = (req.body?.name || '').trim();
+    if (!name) return res.status(400).json({ error: 'El nombre es obligatorio' });
+    const dup = await whereEq('categories', 'name', name);
+    if (dup.length) return res.status(409).json({ error: 'Ya existe una categoria con ese nombre' });
+    const id = await createDoc('categories', { name });
+    res.status(201).json(await getDoc('categories', id));
+  })
+);
 
-router.put('/:id', authRequired, adminRequired, (req, res) => {
-  const name = (req.body?.name || '').trim();
-  if (!name) return res.status(400).json({ error: 'El nombre es obligatorio' });
-  try {
-    const r = run('UPDATE categories SET name = ? WHERE id = ?', [name, req.params.id]);
-    if (!r.changes) return res.status(404).json({ error: 'Categoria no encontrada' });
-    res.json(get('SELECT * FROM categories WHERE id = ?', [req.params.id]));
-  } catch {
-    res.status(409).json({ error: 'Ya existe una categoria con ese nombre' });
-  }
-});
+router.put(
+  '/:id',
+  authRequired,
+  adminRequired,
+  h(async (req, res) => {
+    const name = (req.body?.name || '').trim();
+    if (!name) return res.status(400).json({ error: 'El nombre es obligatorio' });
+    const existing = await getDoc('categories', req.params.id);
+    if (!existing) return res.status(404).json({ error: 'Categoria no encontrada' });
+    const dup = await whereEq('categories', 'name', name);
+    if (dup.some((d) => d.id !== req.params.id)) return res.status(409).json({ error: 'Ya existe una categoria con ese nombre' });
+    await updateDoc('categories', req.params.id, { name });
+    res.json(await getDoc('categories', req.params.id));
+  })
+);
 
-router.delete('/:id', authRequired, adminRequired, (req, res) => {
-  const count = get('SELECT COUNT(*) AS n FROM products WHERE category_id = ?', [req.params.id]);
-  if (count.n > 0) {
-    return res.status(409).json({ error: 'No se puede borrar: tiene productos asignados' });
-  }
-  const r = run('DELETE FROM categories WHERE id = ?', [req.params.id]);
-  if (!r.changes) return res.status(404).json({ error: 'Categoria no encontrada' });
-  res.json({ message: 'Categoria eliminada' });
-});
+router.delete(
+  '/:id',
+  authRequired,
+  adminRequired,
+  h(async (req, res) => {
+    const products = await whereEq('products', 'category_id', Number(req.params.id));
+    if (products.length) {
+      return res.status(409).json({ error: 'No se puede borrar: tiene productos asignados' });
+    }
+    const existing = await getDoc('categories', req.params.id);
+    if (!existing) return res.status(404).json({ error: 'Categoria no encontrada' });
+    await deleteDoc('categories', req.params.id);
+    res.json({ message: 'Categoria eliminada' });
+  })
+);
 
 export default router;

@@ -1,6 +1,5 @@
 import express from 'express';
 import cors from 'cors';
-import './db.js';
 import authRoutes from './routes/auth.js';
 import productRoutes from './routes/products.js';
 import categoryRoutes from './routes/categories.js';

@@ -1,31 +1,42 @@
 import { Router } from 'express';
-import { get, run } from '../db.js';
+import { h, getDoc, setDoc } from '../fs.js';
 import { authRequired, adminRequired } from '../middleware/auth.js';
 
 const router = Router();
 
-router.get('/', authRequired, (_req, res) => {
-  res.json(get('SELECT store_name, currency, tax_rate, low_stock_alert, initial_fund, box_open_time, box_close_time FROM settings WHERE id = 1'));
-});
+const FIELDS = ['store_name', 'currency', 'tax_rate', 'low_stock_alert', 'initial_fund', 'box_open_time', 'box_close_time'];
 
-router.put('/', authRequired, adminRequired, (req, res) => {
-  const { store_name, currency, tax_rate, low_stock_alert, initial_fund, box_open_time, box_close_time } = req.body || {};
-  const cur = get('SELECT * FROM settings WHERE id = 1');
-  const rate = Number(tax_rate);
-  const fund = Number(initial_fund);
-  run(
-    `UPDATE settings SET store_name = ?, currency = ?, tax_rate = ?, low_stock_alert = ?, initial_fund = ?, box_open_time = ?, box_close_time = ? WHERE id = 1`,
-    [
-      store_name !== undefined ? String(store_name).trim() || cur.store_name : cur.store_name,
-      currency !== undefined ? String(currency).trim() || cur.currency : cur.currency,
-      isNaN(rate) || rate < 0 ? cur.tax_rate : rate,
-      low_stock_alert === undefined ? cur.low_stock_alert : low_stock_alert ? 1 : 0,
-      isNaN(fund) || fund < 0 ? cur.initial_fund : fund,
-      box_open_time !== undefined ? String(box_open_time) || cur.box_open_time : cur.box_open_time,
-      box_close_time !== undefined ? String(box_close_time) || cur.box_close_time : cur.box_close_time,
-    ]
-  );
-  res.json(get('SELECT store_name, currency, tax_rate, low_stock_alert, initial_fund, box_open_time, box_close_time FROM settings WHERE id = 1'));
-});
+router.get(
+  '/',
+  authRequired,
+  h(async (_req, res) => {
+    const s = (await getDoc('settings', 'main')) || {};
+    res.json({ store_name: 'Mi Minimarket', currency: '$', tax_rate: 0, low_stock_alert: 1, initial_fund: 100, box_open_time: '08:00', box_close_time: '18:00', ...s });
+  })
+);
+
+router.put(
+  '/',
+  authRequired,
+  adminRequired,
+  h(async (req, res) => {
+    const body = req.body || {};
+    const cur = (await getDoc('settings', 'main')) || {};
+    const rate = Number(body.tax_rate);
+    const fund = Number(body.initial_fund);
+    const next = {
+      store_name: body.store_name !== undefined ? String(body.store_name).trim() || cur.store_name : cur.store_name,
+      currency: body.currency !== undefined ? String(body.currency).trim() || cur.currency : cur.currency,
+      tax_rate: isNaN(rate) || rate < 0 ? cur.tax_rate : rate,
+      low_stock_alert: body.low_stock_alert === undefined ? cur.low_stock_alert : body.low_stock_alert ? 1 : 0,
+      initial_fund: isNaN(fund) || fund < 0 ? cur.initial_fund : fund,
+      box_open_time: body.box_open_time !== undefined ? String(body.box_open_time) || cur.box_open_time : cur.box_open_time,
+      box_close_time: body.box_close_time !== undefined ? String(body.box_close_time) || cur.box_close_time : cur.box_close_time,
+    };
+    const merged = { store_name: 'Mi Minimarket', currency: '$', tax_rate: 0, low_stock_alert: 1, initial_fund: 100, box_open_time: '08:00', box_close_time: '18:00', ...cur, ...next };
+    await setDoc('settings', 'main', merged);
+    res.json(merged);
+  })
+);
 
 export default router;

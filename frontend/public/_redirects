@@ -1,0 +1,4 @@
+# Redirige las llamadas /api/* a tu backend (Firebase + API Node).
+# Reemplaza https://tu-api.en-render.com por la URL donde despliegues la API.
+# Cloudflare Pages responderá con código 200 haciendo de proxy.
+/api/*  https://tu-api.en-render.com/api/:splat  200

@@ -28,7 +28,8 @@ async function request(path, options = {}) {
   const token = getToken();
   if (token) headers.Authorization = `Bearer ${token}`;
 
-  const res = await fetch(`/api${path}`, { ...options, headers });
+  const base = import.meta.env.VITE_API_URL || '';
+  const res = await fetch(`${base}/api${path}`, { ...options, headers });
   let data = null;
   try {
     data = await res.json();

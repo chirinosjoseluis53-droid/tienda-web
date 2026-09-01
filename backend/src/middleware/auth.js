@@ -1,5 +1,5 @@
 import jwt from 'jsonwebtoken';
-import { get } from '../db.js';
+import { getDoc } from '../fs.js';
 
 export const JWT_SECRET = process.env.JWT_SECRET || 'minimarket-secret-key';
 export const TOKEN_TTL = '12h';
@@ -28,6 +28,6 @@ export function adminRequired(req, res, next) {
   next();
 }
 
-export function getUserById(id) {
-  return get('SELECT id, name, email, role, active FROM users WHERE id = ?', [id]);
+export async function getUserById(id) {
+  return getDoc('users', id);
 }

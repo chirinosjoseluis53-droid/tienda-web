@@ -1,0 +1,23 @@
+services:
+  - type: web
+    name: tienda-web-backend
+    runtime: node
+    rootDir: backend
+    buildCommand: npm install
+    startCommand: npm start
+    envVars:
+      - key: JWT_SECRET
+        generateValue: true
+
+  - type: web
+    name: tienda-web
+    runtime: node
+    rootDir: frontend
+    buildCommand: npm install && npm run build
+    startCommand: npx serve -s dist
+    envVars:
+      - key: VITE_API_URL
+        fromService:
+          name: tienda-web-backend
+          type: web
+          property: hostUrl

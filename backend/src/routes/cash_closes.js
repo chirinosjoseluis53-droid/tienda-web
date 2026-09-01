@@ -1,21 +1,30 @@
 import { Router } from 'express';
-import { query, get, run } from '../db.js';
+import { h, listColl, getDoc, createDoc, deleteDoc, whereEq } from '../fs.js';
 import { authRequired } from '../middleware/auth.js';
 
 const router = Router();
 
 function todayStr() {
-  return new Date().toISOString().slice(0, 10); // YYYY-MM-DD (consistent con created_at que usa UTC)
+  return new Date().toISOString().slice(0, 10);
 }
 
-function scopeClause(req) {
-  if (req.user.role === 'admin') return { sql: '', params: [] };
-  return { sql: 'AND s.user_id = ?', params: [req.user.id] };
+function scopeRows(req, rows) {
+  if (req.user.role === 'admin') return rows;
+  return rows.filter((r) => String(r.user_id) === String(req.user.id));
 }
 
-// Suma por metodo de pago a partir del detalle real guardado en la venta.
-// payment_detail = {"cash": x, "card": y, "transfer": z} (en USD, bs ya convertido).
-// Si falta el detalle, cae al metodo principal de la venta.
+function parseDetail(detail) {
+  try {
+    const d = JSON.parse(detail || '{}');
+    if (typeof d.cash === 'number' || typeof d.card === 'number' || typeof d.transfer === 'number') {
+      return { cash: Number(d.cash) || 0, card: Number(d.card) || 0, transfer: Number(d.transfer) || 0 };
+    }
+  } catch {
+    /* ignore */
+  }
+  return null;
+}
+
 function summarise(salesRows, initialFund) {
   const out = { cash: 0, card: 0, transfer: 0, other: 0, total: 0, count: salesRows.length, initial_fund: initialFund };
   for (const row of salesRows) {
@@ -42,142 +51,116 @@ function summarise(salesRows, initialFund) {
   return out;
 }
 
-function parseDetail(detail) {
-  try {
-    const d = JSON.parse(detail || '{}');
-    if (typeof d.cash === 'number' || typeof d.card === 'number' || typeof d.transfer === 'number') {
-      return {
-        cash: Number(d.cash) || 0,
-        card: Number(d.card) || 0,
-        transfer: Number(d.transfer) || 0,
-      };
+async function initialFund() {
+  const s = await getDoc('settings', 'main');
+  return Number(s?.initial_fund) || 0;
+}
+
+async function todayRows(req) {
+  const all = await listColl('sales');
+  return scopeRows(req, all.filter((s) => s.created_at.slice(0, 10) === todayStr()));
+}
+
+router.get(
+  '/',
+  authRequired,
+  h(async (req, res) => {
+    const closes = await listColl('cash_closes');
+    const scoped = scopeRows(req, closes).sort((a, b) => (a.date > b.date ? -1 : a.date < b.date ? 1 : a.id > b.id ? -1 : 1));
+    const users = Object.fromEntries((await listColl('users')).map((u) => [String(u.id), u]));
+    res.json(scoped.slice(0, 60).map((c) => ({ ...c, user_name: users[c.user_id]?.name || '?' })));
+  })
+);
+
+router.get(
+  '/today-summary',
+  authRequired,
+  h(async (req, res) => {
+    res.json(summarise(await todayRows(req), await initialFund()));
+  })
+);
+
+router.get(
+  '/latest',
+  authRequired,
+  h(async (req, res) => {
+    const closes = scopeRows(req, (await listColl('cash_closes')).filter((c) => c.date === todayStr())).sort((a, b) => (a.id > b.id ? -1 : 1));
+    res.json(closes[0] || null);
+  })
+);
+
+router.post(
+  '/',
+  authRequired,
+  h(async (req, res) => {
+    const {
+      turn = 'Matutino (08:00 - 13:00)',
+      declared_cash = 0,
+      declared_card = 0,
+      declared_transfer = 0,
+      declared_initial_fund,
+      explanation = '',
+    } = req.body || {};
+
+    const today = todayStr();
+    const existing = (await whereEq('cash_closes', 'date', today)).find(
+      (c) => String(c.user_id) === String(req.user.id) && c.turn === turn
+    );
+    if (existing) {
+      return res.status(409).json({ error: 'Ya existe un cierre de caja para este turno de hoy.' });
     }
-  } catch {
-    /* ignore */
-  }
-  return null;
-}
 
-function initialFund() {
-  return Number(get('SELECT initial_fund FROM settings WHERE id = 1').initial_fund) || 0;
-}
+    const sys = summarise(await todayRows(req), await initialFund());
+    const fund = Number(declared_initial_fund);
+    const declCash = +Number(declared_cash).toFixed(2);
+    const declCard = +Number(declared_card).toFixed(2);
+    const declTransfer = +Number(declared_transfer).toFixed(2);
+    const declFund = isNaN(fund) || fund < 0 ? sys.initial_fund : +fund.toFixed(2);
 
-function todayRows(req) {
-  const scope = scopeClause(req);
-  return query(
-    `SELECT payment_method, payment_detail, total FROM sales s
-     WHERE date(s.created_at) = ? ${scope.sql}`,
-    [todayStr(), ...scope.params]
-  );
-}
+    const sysTotal = +(sys.cash + sys.card + sys.transfer + sys.initial_fund).toFixed(2);
+    const declTotal = +(declCash + declCard + declTransfer + declFund).toFixed(2);
+    const difference = +(declTotal - sysTotal).toFixed(2);
 
-// ─── GET /api/cash-closes  (historial de cierres, admin: todos / empleado: los suyos) ──
-router.get('/', authRequired, (req, res) => {
-  const scope = req.user.role === 'admin' ? '' : 'WHERE cc.user_id = ?';
-  const params = req.user.role === 'admin' ? [] : [req.user.id];
-  const rows = query(
-    `SELECT cc.*, u.name AS user_name
-     FROM cash_closes cc
-     JOIN users u ON u.id = cc.user_id
-     ${scope}
-     ORDER BY cc.date DESC, cc.id DESC
-     LIMIT 60`,
-    params
-  );
-  res.json(rows);
-});
+    const id = await createDoc('cash_closes', {
+      user_id: req.user.id,
+      turn,
+      date: today,
+      system_cash: sys.cash, system_card: sys.card, system_transfer: sys.transfer, system_initial_fund: sys.initial_fund, system_total: sysTotal,
+      declared_cash: declCash, declared_card: declCard, declared_transfer: declTransfer, declared_initial_fund: declFund, declared_total: declTotal,
+      difference,
+      explanation,
+    });
 
-// ─── GET /api/cash-closes/today-summary  (totales del dia por metodo) ────────────────
-router.get('/today-summary', authRequired, (req, res) => {
-  const summary = summarise(todayRows(req), initialFund());
-  res.json(summary);
-});
+    res.status(201).json({ message: 'Cierre de caja registrado exitosamente', close: await getDoc('cash_closes', id) });
+  })
+);
 
-// ─── GET /api/cash-closes/latest  (cerrado para hoy o null) ─────────────────────────
-router.get('/latest', authRequired, (req, res) => {
-  const scope = req.user.role === 'admin' ? '' : 'AND user_id = ?';
-  const params = req.user.role === 'admin' ? [] : [req.user.id];
-  const row = get(
-    `SELECT * FROM cash_closes WHERE date = ? ${scope} ORDER BY id DESC LIMIT 1`,
-    [todayStr(), ...params]
-  );
-  res.json(row || null);
-});
+router.delete(
+  '/:id',
+  authRequired,
+  h(async (req, res) => {
+    if (req.user.role !== 'admin') {
+      return res.status(403).json({ error: 'Solo administradores pueden reabrir la caja' });
+    }
+    const existing = await getDoc('cash_closes', req.params.id);
+    if (!existing) return res.status(404).json({ error: 'Cierre no encontrado' });
+    await deleteDoc('cash_closes', req.params.id);
+    res.json({ message: 'Caja reabierta correctamente', id: req.params.id });
+  })
+);
 
-// ─── POST /api/cash-closes  (ejecutar el cierre de caja) ─────────────────────────────
-router.post('/', authRequired, (req, res) => {
-  const {
-    turn = 'Matutino (08:00 - 13:00)',
-    declared_cash = 0,
-    declared_card = 0,
-    declared_transfer = 0,
-    declared_initial_fund,
-    explanation = '',
-  } = req.body || {};
-
-  const today = todayStr();
-  const existing = get('SELECT id FROM cash_closes WHERE user_id = ? AND date = ? AND turn = ?', [
-    req.user.id,
-    today,
-    turn,
-  ]);
-  if (existing) {
-    return res.status(409).json({ error: 'Ya existe un cierre de caja para este turno de hoy.' });
-  }
-
-  const sys = summarise(todayRows(req), initialFund());
-  const fund = Number(declared_initial_fund);
-  const declCash = +Number(declared_cash).toFixed(2);
-  const declCard = +Number(declared_card).toFixed(2);
-  const declTransfer = +Number(declared_transfer).toFixed(2);
-  const declFund = isNaN(fund) || fund < 0 ? sys.initial_fund : +fund.toFixed(2);
-
-  const sysTotal = +(sys.cash + sys.card + sys.transfer + sys.initial_fund).toFixed(2);
-  const declTotal = +(declCash + declCard + declTransfer + declFund).toFixed(2);
-  const difference = +(declTotal - sysTotal).toFixed(2);
-
-  const { id } = run(
-    `INSERT INTO cash_closes
-       (user_id, turn, date,
-        system_cash, system_card, system_transfer, system_initial_fund, system_total,
-        declared_cash, declared_card, declared_transfer, declared_initial_fund, declared_total,
-        difference, explanation)
-     VALUES (?,?,?, ?,?,?,?,?, ?,?,?,?,?, ?,?)`,
-    [
-      req.user.id, turn, today,
-      sys.cash, sys.card, sys.transfer, sys.initial_fund, sysTotal,
-      declCash, declCard, declTransfer, declFund, declTotal,
-      difference, explanation,
-    ]
-  );
-
-  const saved = get('SELECT * FROM cash_closes WHERE id = ?', [id]);
-  res.status(201).json({ message: 'Cierre de caja registrado exitosamente', close: saved });
-});
-
-// ─── DELETE /api/cash-closes/:id  (reabrir caja — solo admin) ────────────────────────
-router.delete('/:id', authRequired, (req, res) => {
-  if (req.user.role !== 'admin') {
-    return res.status(403).json({ error: 'Solo administradores pueden reabrir la caja' });
-  }
-  const r = run('DELETE FROM cash_closes WHERE id = ?', [req.params.id]);
-  if (!r.changes) return res.status(404).json({ error: 'Cierre no encontrado' });
-  res.json({ message: 'Caja reabierta correctamente', id: Number(req.params.id) });
-});
-
-// ─── GET /api/cash-closes/:id  (detalle de un cierre) ────────────────────────────────
-router.get('/:id', authRequired, (req, res) => {
-  const row = get(
-    `SELECT cc.*, u.name AS user_name
-     FROM cash_closes cc JOIN users u ON u.id = cc.user_id
-     WHERE cc.id = ?`,
-    [req.params.id]
-  );
-  if (!row) return res.status(404).json({ error: 'Cierre no encontrado' });
-  if (req.user.role !== 'admin' && row.user_id !== req.user.id) {
-    return res.status(403).json({ error: 'Sin acceso' });
-  }
-  res.json(row);
-});
+router.get(
+  '/:id',
+  authRequired,
+  h(async (req, res) => {
+    const row = await getDoc('cash_closes', req.params.id);
+    if (!row) return res.status(404).json({ error: 'Cierre no encontrado' });
+    if (req.user.role !== 'admin' && String(row.user_id) !== String(req.user.id)) {
+      return res.status(403).json({ error: 'Sin acceso' });
+    }
+    const users = Object.fromEntries((await listColl('users')).map((u) => [String(u.id), u]));
+    res.json({ ...row, user_name: users[row.user_id]?.name || '?' });
+  })
+);
 
 export default router;

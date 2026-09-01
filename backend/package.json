@@ -6,12 +6,14 @@
   "main": "src/server.js",
   "scripts": {
     "start": "node src/server.js",
-    "seed": "node src/seed.js"
+    "seed": "node src/seed.js",
+    "seed:firebase": "node src/firebase_seed.js"
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",
     "cors": "^2.8.5",
     "express": "^4.19.2",
+    "firebase-admin": "^14.3.0",
     "jsonwebtoken": "^9.0.2"
   }
 }
