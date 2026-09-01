@@ -9,6 +9,7 @@ import dashboardRoutes from './routes/dashboard.js';
 import userRoutes from './routes/users.js';
 import settingRoutes from './routes/settings.js';
 import cashCloseRoutes from './routes/cash_closes.js';
+import { get } from './db.js';
 
 const app = express();
 const PORT = process.env.PORT || 4000;
@@ -32,6 +33,21 @@ app.use((err, _req, res, _next) => {
   res.status(500).json({ error: 'Error interno del servidor' });
 });
 
-app.listen(PORT, () => {
-  console.log(`API del minimarket corriendo en http://localhost:${PORT}`);
-});
+async function seedIfEmpty() {
+  const users = get('SELECT COUNT(*) AS n FROM users');
+  if (users && Number(users.n) === 0) {
+    console.log('Base vacia, ejecutando seed inicial...');
+    const { default: seed } = await import('./seed.js');
+    await seed();
+  }
+}
+
+seedIfEmpty()
+  .catch((e) => {
+    console.error('Error al inicializar la base de datos:', e);
+  })
+  .finally(() => {
+    app.listen(PORT, () => {
+      console.log(`API del minimarket corriendo en http://localhost:${PORT}`);
+    });
+  });

@@ -7,3 +7,7 @@ backend/data/
 .qodo/
 .DS_Store
 Thumbs.db
+serviceAccountKey.json
+*service-account*.json
+firebaseConfig.json
+*-firebase-adminsdk-*.json

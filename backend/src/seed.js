@@ -173,7 +173,12 @@ function keyFor(keys, idx) {
   return sorted[idx] ?? null;
 }
 
-seed().catch((e) => {
-  console.error(e);
-  process.exit(1);
-});
+export default seed;
+
+const isMain = process.argv[1] && process.argv[1].endsWith('seed.js');
+if (isMain) {
+  seed().catch((e) => {
+    console.error(e);
+    process.exit(1);
+  });
+}

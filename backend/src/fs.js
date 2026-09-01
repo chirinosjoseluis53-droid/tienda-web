@@ -1,54 +1,171 @@
-import { firestore, ts } from './firebase.js';
+import { db, query, get, run } from './db.js';
 
-const snap = (d) => ({ id: d.id, ...d.data() });
+export const ts = () => new Date().toISOString().replace('T', ' ').slice(0, 19);
 
-export async function getDoc(coll, id) {
-  const s = await firestore.collection(coll).doc(String(id)).get();
-  return s.exists ? snap(s) : null;
+function normalize(coll, row) {
+  if (!row) return null;
+  return { ...row, id: String(row.id) };
 }
 
-export async function listColl(coll) {
-  const snap = await firestore.collection(coll).get();
-  return snap.docs.map(snap);
-}
+// Colecciones cuyo identificador no es la columna 'id' autoincrement.
+const KEY_BY_COLLECTION = {
+  settings: 'id',
+  password_resets: 'token',
+};
 
-export async function whereEq(coll, field, value) {
-  const snap = await firestore.collection(coll).where(field, '==', value).get();
-  return snap.docs.map(snap);
-}
-
-export async function createDoc(coll, data) {
-  const ref = firestore.collection(coll).doc();
-  await ref.set({ ...data, created_at: data.created_at || ts() });
-  return ref.id;
-}
-
-export async function setDoc(coll, id, data) {
-  await firestore.collection(coll).doc(String(id)).set(data);
+function normalizeKey(coll, id) {
+  if (coll === 'settings' && (id === 'main' || id === '1')) return '1';
   return String(id);
 }
 
+function tableCols(coll, data) {
+  const existing = db.prepare(`PRAGMA table_info(${coll})`).all().map((c) => c.name);
+  return Object.keys(data).filter((k) => existing.includes(k));
+}
+
+const SUBQUERY = {
+  'sales/items': (parentId) => ['sale_items', `sale_id = ?`, [String(parentId)]],
+  'clients/sales': (parentId) => ['sales', `client_id = ? AND client_id IS NOT NULL`, [String(parentId)]],
+};
+
+function subTarget(coll, parentId, sub) {
+  const key = `${coll}/${sub}`;
+  if (SUBQUERY[key]) return SUBQUERY[key](parentId);
+  throw new Error(`Subcoleccion no soportada: ${key}`);
+}
+
+export async function getDoc(coll, id) {
+  const key = normalizeKey(coll, id);
+  if (coll === 'password_resets') {
+    return normalize(coll, get(`SELECT * FROM password_resets WHERE token = ?`, [key]));
+  }
+  const row = key === '1' && coll === 'settings'
+    ? get(`SELECT * FROM settings WHERE id = 1`)
+    : get(`SELECT * FROM ${coll} WHERE id = ?`, [key]);
+  return normalize(coll, row);
+}
+
+export async function listColl(coll) {
+  return query(`SELECT * FROM ${coll}`).map((r) => normalize(coll, r));
+}
+
+export async function whereEq(coll, field, value) {
+  return query(`SELECT * FROM ${coll} WHERE ${field} = ?`, [value]).map((r) => normalize(coll, r));
+}
+
+export async function createDoc(coll, data) {
+  const cols = tableCols(coll, data);
+  const r = run(
+    `INSERT INTO ${coll} (${cols.join(',')}) VALUES (${cols.map(() => '?').join(',')})`,
+    cols.map((c) => data[c])
+  );
+  return Number(r.id);
+}
+
+export async function setDoc(coll, id, data) {
+  if (coll.includes('/')) {
+    const parts = coll.split('/');
+    const pColl = parts[0];
+    const pId = parts[1];
+    const sub = parts[2];
+    const [table, where, params] = subTarget(pColl, pId, sub);
+    let cols = tableCols(table, data);
+    const existing = get(`SELECT * FROM ${table} WHERE ${where}`, params);
+    if (existing) {
+      if (cols.length) {
+        const sets = cols.map((c) => `${c} = ?`).join(',');
+        run(`UPDATE ${table} SET ${sets} WHERE ${where}`, [...cols.map((c) => data[c]), ...params]);
+      }
+    } else {
+      const fkCol = where.split(' ')[0];
+      const insertCols = cols.includes(fkCol) ? cols : [fkCol, ...cols];
+      const values = cols.includes(fkCol)
+        ? cols.map((c) => data[c])
+        : [...params, ...cols.map((c) => data[c])];
+      run(
+        `INSERT INTO ${table} (${insertCols.join(',')}) VALUES (${insertCols.map(() => '?').join(',')})`,
+        values
+      );
+    }
+    return id;
+  }
+
+  const key = normalizeKey(coll, id);
+
+  if (coll === 'password_resets') {
+    const existing = get(`SELECT * FROM password_resets WHERE token = ?`, [key]);
+    const cols = tableCols('password_resets', data);
+    if (existing && cols.length) {
+      const sets = cols.map((c) => `${c} = ?`).join(',');
+      run(`UPDATE password_resets SET ${sets} WHERE token = ?`, [...cols.map((c) => data[c]), key]);
+    } else if (!existing) {
+      const insertCols = ['token', ...cols];
+      run(
+        `INSERT INTO password_resets (${insertCols.join(',')}) VALUES (${insertCols.map(() => '?').join(',')})`,
+        [key, ...cols.map((c) => data[c])]
+      );
+    }
+    return key;
+  }
+
+  if (coll === 'settings') {
+    const existing = get(`SELECT * FROM settings WHERE id = 1`);
+    const cols = tableCols('settings', data);
+    if (existing && cols.length) {
+      const sets = cols.map((c) => `${c} = ?`).join(',');
+      run(`UPDATE settings SET ${sets} WHERE id = 1`, cols.map((c) => data[c]));
+    }
+    return '1';
+  }
+
+  const existing = get(`SELECT * FROM ${coll} WHERE id = ?`, [key]);
+  const cols = tableCols(coll, data);
+  if (existing) {
+    if (cols.length) {
+      const sets = cols.map((c) => `${c} = ?`).join(',');
+      run(`UPDATE ${coll} SET ${sets} WHERE id = ?`, [...cols.map((c) => data[c]), key]);
+    }
+  } else {
+    run(
+      `INSERT INTO ${coll} (${cols.join(',')}) VALUES (${cols.map(() => '?').join(',')})`,
+      cols.map((c) => data[c])
+    );
+  }
+  return key;
+}
+
 export async function updateDoc(coll, id, updates) {
-  await firestore.collection(coll).doc(String(id)).update(updates);
+  const key = normalizeKey(coll, id);
+  const cols = tableCols(coll, updates);
+  if (cols.length === 0) return;
+
+  if (coll === 'password_resets') {
+    const sets = cols.map((c) => `${c} = ?`).join(',');
+    run(`UPDATE password_resets SET ${sets} WHERE token = ?`, [...cols.map((c) => updates[c]), key]);
+    return;
+  }
+  if (coll === 'settings') {
+    const sets = cols.map((c) => `${c} = ?`).join(',');
+    run(`UPDATE settings SET ${sets} WHERE id = 1`, cols.map((c) => updates[c]));
+    return;
+  }
+
+  const sets = cols.map((c) => `${c} = ?`).join(',');
+  run(`UPDATE ${coll} SET ${sets} WHERE id = ?`, [...cols.map((c) => updates[c]), String(key)]);
 }
 
 export async function deleteDoc(coll, id) {
-  await firestore.collection(coll).doc(String(id)).delete();
+  const key = normalizeKey(coll, id);
+  if (coll === 'password_resets') {
+    run(`DELETE FROM password_resets WHERE token = ?`, [key]);
+    return;
+  }
+  run(`DELETE FROM ${coll} WHERE id = ?`, [String(key)]);
 }
 
-export async function listSub(coll, id, sub) {
-  const snap = await firestore.collection(coll).doc(String(id)).collection(sub).get();
-  return snap.docs.map(snap);
-}
-
-// Envoltorio para handlers async: captura errores y responde 500 (Express 4 no los captura solo).
-export function h(fn) {
-  return (req, res, _next) => {
-    Promise.resolve(fn(req, res)).catch((e) => {
-      console.error(e);
-      if (!res.headersSent) res.status(500).json({ error: 'Error interno del servidor' });
-    });
-  };
+export async function listSub(coll, parentId, sub) {
+  const [table, where, params] = subTarget(coll, parentId, sub);
+  return query(`SELECT * FROM ${table} WHERE ${where}`, params).map((r) => normalize(table, r));
 }
 
 export async function userMap() {
@@ -66,4 +183,13 @@ export async function productMap() {
   return Object.fromEntries(products.map((p) => [String(p.id), p]));
 }
 
-export { firestore, ts };
+export function h(fn) {
+  return (req, res, _next) => {
+    Promise.resolve(fn(req, res)).catch((e) => {
+      console.error(e);
+      if (!res.headersSent) res.status(500).json({ error: 'Error interno del servidor' });
+    });
+  };
+}
+
+export { db };

@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { firestore, h, listColl, getDoc, createDoc, setDoc, deleteDoc, listSub, whereEq } from '../fs.js';
+import { h, listColl, getDoc, createDoc, setDoc, deleteDoc, listSub, whereEq, updateDoc } from '../fs.js';
 import { authRequired } from '../middleware/auth.js';
 
 const router = Router();
@@ -80,15 +80,15 @@ router.post(
       subtotal += lineTotal;
       idx += 1;
       await setDoc(`sales/${saleId}/items`, String(idx), { product_id: it.product_id, quantity: qty, unit_price: p.price, name: p.name });
-      await firestore.collection('products').doc(String(it.product_id)).update({ stock: +p.stock - qty });
+      await updateDoc('products', String(it.product_id), { stock: +p.stock - qty });
       details.push({ product_id: it.product_id, qty, quantity: qty, unit_price: p.price, name: p.name });
     }
 
     const { tax_rate } = await settings();
     const tax = +(subtotal * (tax_rate / 100)).toFixed(2);
     const total = +(subtotal + tax).toFixed(2);
-    await firestore.collection('sales').doc(saleId).update({ total });
-    if (client_id) await firestore.collection('clients').doc(String(client_id)).collection('sales').doc(saleId).set({ sale_id: saleId });
+    await updateDoc('sales', String(saleId), { total });
+    if (client_id) await updateDoc('clients', String(client_id), {});
 
     res.status(201).json({ message: 'Venta registrada', sale: { id: saleId, subtotal: +subtotal.toFixed(2), tax, total, payment_method: method, details } });
   })
@@ -135,10 +135,9 @@ router.delete(
       const items = await listSub('sales', req.params.id, 'items');
       for (const it of items) {
         const p = await getDoc('products', it.product_id);
-        if (p) await firestore.collection('products').doc(String(it.product_id)).update({ stock: +p.stock + it.quantity });
+        if (p) await updateDoc('products', String(it.product_id), { stock: +p.stock + it.quantity });
       }
       await deleteDoc('sales', req.params.id);
-      if (s.client_id) await firestore.collection('clients').doc(String(s.client_id)).collection('sales').doc(req.params.id).delete();
       res.json({ message: 'Venta eliminada y stock restaurado' });
     } else {
       res.status(403).json({ error: 'Solo administradores pueden eliminar ventas' });
