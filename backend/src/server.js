@@ -1,5 +1,8 @@
 import express from 'express';
 import cors from 'cors';
+import { existsSync } from 'node:fs';
+import { join, dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import authRoutes from './routes/auth.js';
 import productRoutes from './routes/products.js';
 import categoryRoutes from './routes/categories.js';
@@ -11,13 +14,15 @@ import settingRoutes from './routes/settings.js';
 import cashCloseRoutes from './routes/cash_closes.js';
 import { get } from './db.js';
 
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const DIST_DIR = join(__dirname, '..', '..', 'frontend', 'dist');
+
 const app = express();
 const PORT = process.env.PORT || 4000;
 
 app.use(cors());
 app.use(express.json());
 
-app.get('/', (_req, res) => res.json({ name: 'API Minimarket', status: 'ok' }));
 app.use('/api/auth', authRoutes);
 app.use('/api/products', productRoutes);
 app.use('/api/categories', categoryRoutes);
@@ -27,6 +32,15 @@ app.use('/api/dashboard', dashboardRoutes);
 app.use('/api/users', userRoutes);
 app.use('/api/settings', settingRoutes);
 app.use('/api/cash-closes', cashCloseRoutes);
+
+if (existsSync(DIST_DIR)) {
+  app.use(express.static(DIST_DIR));
+  app.get(/^(?!\/api).*/i, (_req, res) => {
+    res.sendFile(join(DIST_DIR, 'index.html'));
+  });
+} else {
+  app.use((_req, res) => res.status(404).json({ error: 'Frontend no construido' }));
+}
 
 app.use((err, _req, res, _next) => {
   console.error(err);
