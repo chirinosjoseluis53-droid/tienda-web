@@ -3,16 +3,12 @@ import { h, listColl, getDoc, createDoc, setDoc, deleteDoc, listSub, whereEq, up
 import { authRequired } from '../middleware/auth.js';
 
 const router = Router();
-
-async function settings() {
-  const s = await getDoc('settings', 'main');
-  return { currency: '$', tax_rate: 0, ...s };
-}
+const myStore = (req) => String(req.user.store_id);
 
 async function loadList(user) {
-  const sales = await listColl('sales');
+  const sales = (await listColl('sales')).filter((s) => String(s.store_id) === String(user.store_id || ''));
   let rows = sales;
-  if (user.role !== 'admin') rows = rows.filter((s) => s.user_id === user.id);
+  if (user.role !== 'admin') rows = rows.filter((s) => String(s.user_id) === String(user.id));
   rows.sort((a, b) => (a.created_at > b.created_at ? -1 : 1));
   const users = Object.fromEntries((await listColl('users')).map((u) => [String(u.id), u]));
   const clients = Object.fromEntries((await listColl('clients')).map((c) => [String(c.id), c]));
@@ -44,16 +40,22 @@ router.post(
     const method = allowedMethods.includes(payment_method) ? payment_method : 'efectivo';
 
     const today = new Date().toISOString().slice(0, 10);
-    let closedRows = await whereEq('cash_closes', 'date', today);
-    if (req.user.role !== 'admin') closedRows = closedRows.filter((c) => c.user_id === req.user.id);
+    let closedRows = (await whereEq('cash_closes', 'date', today)).filter((c) => String(c.store_id) === myStore(req));
+    if (req.user.role !== 'admin') closedRows = closedRows.filter((c) => String(c.user_id) === String(req.user.id));
     if (closedRows.length) {
       return res.status(403).json({ error: 'La caja de hoy ya fue cerrada. Reabre la caja para continuar vendiendo.' });
+    }
+
+    if (client_id) {
+      const c = await getDoc('clients', client_id);
+      if (!c || String(c.store_id) !== myStore(req)) return res.status(400).json({ error: 'Cliente no encontrado' });
     }
 
     const saleId = await createDoc('sales', {
       user_id: req.user.id,
       client_id: client_id || null,
       total: 0,
+      store_id: myStore(req),
       payment_method: method,
       payment_detail: JSON.stringify(payment_detail),
     });
@@ -67,8 +69,8 @@ router.post(
         await deleteDoc('sales', saleId);
         return res.status(400).json({ error: 'Cantidad invalida' });
       }
-      const p = await getDoc('products', it.product_id);
-      if (!p) {
+      const p = await getDoc('products', String(it.product_id));
+      if (!p || String(p.store_id) !== myStore(req)) {
         await deleteDoc('sales', saleId);
         return res.status(400).json({ error: 'Producto no encontrado' });
       }
@@ -84,7 +86,8 @@ router.post(
       details.push({ product_id: it.product_id, qty, quantity: qty, unit_price: p.price, name: p.name });
     }
 
-    const { tax_rate } = await settings();
+    const s = await getDoc('store_settings', String(req.user.store_id));
+    const tax_rate = Number(s?.tax_rate) || 0;
     const tax = +(subtotal * (tax_rate / 100)).toFixed(2);
     const total = +(subtotal + tax).toFixed(2);
     await updateDoc('sales', String(saleId), { total });
@@ -110,13 +113,13 @@ router.get(
   '/:id',
   authRequired,
   h(async (req, res) => {
-    const list = await loadList({ role: 'admin' });
-    const s = list.find((x) => x.id === req.params.id) || (await getDoc('sales', req.params.id));
-    if (!s) return res.status(404).json({ error: 'Venta no encontrada' });
+    const list = await loadList({ role: 'admin', store_id: req.user.store_id });
+    const s = list.find((x) => String(x.id) === String(req.params.id)) || (await getDoc('sales', req.params.id));
+    if (!s || String(s.store_id) !== myStore(req)) return res.status(404).json({ error: 'Venta no encontrada' });
     if (req.user.role !== 'admin' && String(s.user_id) !== String(req.user.id)) {
       return res.status(403).json({ error: 'No puedes ver esta venta' });
     }
-    const products = Object.fromEntries((await listColl('products')).map((p) => [String(p.id), p]));
+    const products = Object.fromEntries((await listColl('products')).filter((p) => String(p.store_id) === myStore(req)).map((p) => [String(p.id), p]));
     const items = (await listSub('sales', req.params.id, 'items')).map((it) => ({
       ...it,
       product_name: products[it.product_id]?.name || it.name || '',
@@ -130,7 +133,7 @@ router.delete(
   authRequired,
   h(async (req, res) => {
     const s = await getDoc('sales', req.params.id);
-    if (!s) return res.status(404).json({ error: 'Venta no encontrada' });
+    if (!s || String(s.store_id) !== myStore(req)) return res.status(404).json({ error: 'Venta no encontrada' });
     if (req.user.role === 'admin') {
       const items = await listSub('sales', req.params.id, 'items');
       for (const it of items) {

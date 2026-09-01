@@ -11,11 +11,16 @@ function normalize(coll, row) {
 const KEY_BY_COLLECTION = {
   settings: 'id',
   password_resets: 'token',
+  store_settings: 'store_id',
 };
 
 function normalizeKey(coll, id) {
   if (coll === 'settings' && (id === 'main' || id === '1')) return '1';
   return String(id);
+}
+
+function idColOf(coll) {
+  return KEY_BY_COLLECTION[coll] || 'id';
 }
 
 function tableCols(coll, data) {
@@ -39,10 +44,13 @@ export async function getDoc(coll, id) {
   if (coll === 'password_resets') {
     return normalize(coll, get(`SELECT * FROM password_resets WHERE token = ?`, [key]));
   }
-  const row = key === '1' && coll === 'settings'
-    ? get(`SELECT * FROM settings WHERE id = 1`)
-    : get(`SELECT * FROM ${coll} WHERE id = ?`, [key]);
-  return normalize(coll, row);
+  if (coll === 'settings') {
+    return normalize(coll, get(`SELECT * FROM settings WHERE id = 1`));
+  }
+  if (coll === 'store_settings') {
+    return normalize(coll, get(`SELECT * FROM store_settings WHERE store_id = ?`, [key]));
+  }
+  return normalize(coll, get(`SELECT * FROM ${coll} WHERE id = ?`, [key]));
 }
 
 export async function listColl(coll) {
@@ -118,12 +126,12 @@ export async function setDoc(coll, id, data) {
     return '1';
   }
 
-  const existing = get(`SELECT * FROM ${coll} WHERE id = ?`, [key]);
+  const existing = get(`SELECT * FROM ${coll} WHERE ${idColOf(coll)} = ?`, [key]);
   const cols = tableCols(coll, data);
   if (existing) {
     if (cols.length) {
       const sets = cols.map((c) => `${c} = ?`).join(',');
-      run(`UPDATE ${coll} SET ${sets} WHERE id = ?`, [...cols.map((c) => data[c]), key]);
+      run(`UPDATE ${coll} SET ${sets} WHERE ${idColOf(coll)} = ?`, [...cols.map((c) => data[c]), key]);
     }
   } else {
     run(
@@ -150,8 +158,9 @@ export async function updateDoc(coll, id, updates) {
     return;
   }
 
+  const idCol = idColOf(coll);
   const sets = cols.map((c) => `${c} = ?`).join(',');
-  run(`UPDATE ${coll} SET ${sets} WHERE id = ?`, [...cols.map((c) => updates[c]), String(key)]);
+  run(`UPDATE ${coll} SET ${sets} WHERE ${idCol} = ?`, [...cols.map((c) => updates[c]), String(key)]);
 }
 
 export async function deleteDoc(coll, id) {
@@ -160,7 +169,7 @@ export async function deleteDoc(coll, id) {
     run(`DELETE FROM password_resets WHERE token = ?`, [key]);
     return;
   }
-  run(`DELETE FROM ${coll} WHERE id = ?`, [String(key)]);
+  run(`DELETE FROM ${coll} WHERE ${idColOf(coll)} = ?`, [String(key)]);
 }
 
 export async function listSub(coll, parentId, sub) {
@@ -192,4 +201,4 @@ export function h(fn) {
   };
 }
 
-export { db };
+export { db, run };

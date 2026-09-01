@@ -4,8 +4,14 @@ import { authRequired, adminRequired } from '../middleware/auth.js';
 
 const router = Router();
 
+const myStore = (req) => String(req.user.store_id);
+
 async function withCategory(products, cats) {
   return products.map((p) => ({ ...p, category_id: p.category_id != null ? Number(p.category_id) : null, category_name: p.category_id != null ? cats[String(p.category_id)]?.name || null : null }));
+}
+
+async function listMyProducts(req) {
+  return (await listColl('products')).filter((p) => String(p.store_id) === myStore(req));
 }
 
 router.get(
@@ -13,7 +19,7 @@ router.get(
   authRequired,
   h(async (req, res) => {
     const cats = await categoryMap();
-    let rows = await withCategory(await listColl('products'), cats);
+    let rows = await withCategory(await listMyProducts(req), cats);
     const { search, category, low_stock } = req.query;
     if (search) {
       const s = String(search).toLowerCase();
@@ -31,12 +37,12 @@ router.get(
   authRequired,
   h(async (req, res) => {
     const code = String(req.params.code).trim();
-    let p = (await listColl('products')).find((x) => x.barcode === code);
+    let p = (await listMyProducts(req)).find((x) => x.barcode === code);
     if (p) {
       const cats = await categoryMap();
       return res.json({ ...(await withCategory([p], cats))[0], match_type: 'barcode' });
     }
-    p = (await listColl('products')).find((x) => x.serial === code);
+    p = (await listMyProducts(req)).find((x) => x.serial === code);
     if (p) {
       const cats = await categoryMap();
       return res.json({ ...(await withCategory([p], cats))[0], match_type: 'serial' });
@@ -50,7 +56,7 @@ router.get(
   authRequired,
   h(async (req, res) => {
     const p = await getDoc('products', req.params.id);
-    if (!p) return res.status(404).json({ error: 'Producto no encontrado' });
+    if (!p || String(p.store_id) !== myStore(req)) return res.status(404).json({ error: 'Producto no encontrado' });
     const cats = await categoryMap();
     res.json((await withCategory([p], cats))[0]);
   })
@@ -83,6 +89,12 @@ function validate(body) {
   };
 }
 
+async function categoryInMyStore(req, categoryId) {
+  if (categoryId == null) return true;
+  const cat = await getDoc('categories', categoryId);
+  return !!(cat && String(cat.store_id) === myStore(req));
+}
+
 router.post(
   '/',
   authRequired,
@@ -90,7 +102,8 @@ router.post(
   h(async (req, res) => {
     const v = validate(req.body);
     if (v.error) return res.status(400).json({ error: v.error });
-    const d = v.data;
+    if (!(await categoryInMyStore(req, v.data.category_id))) return res.status(400).json({ error: 'Categoria invalida para esta tienda' });
+    const d = { ...v.data, store_id: myStore(req) };
     const id = await createDoc('products', d);
     const cats = await categoryMap();
     res.status(201).json((await withCategory([await getDoc('products', id)], cats))[0]);
@@ -104,10 +117,10 @@ router.put(
   h(async (req, res) => {
     const v = validate(req.body);
     if (v.error) return res.status(400).json({ error: v.error });
-    const d = v.data;
     const existing = await getDoc('products', req.params.id);
-    if (!existing) return res.status(404).json({ error: 'Producto no encontrado' });
-    await updateDoc('products', req.params.id, d);
+    if (!existing || String(existing.store_id) !== myStore(req)) return res.status(404).json({ error: 'Producto no encontrado' });
+    if (!(await categoryInMyStore(req, v.data.category_id))) return res.status(400).json({ error: 'Categoria invalida para esta tienda' });
+    await updateDoc('products', req.params.id, v.data);
     const cats = await categoryMap();
     res.json((await withCategory([await getDoc('products', req.params.id)], cats))[0]);
   })
@@ -121,7 +134,7 @@ router.patch(
     const qty = Number(req.body.quantity);
     if (isNaN(qty) || qty === 0) return res.status(400).json({ error: 'Cantidad invalida' });
     const p = await getDoc('products', req.params.id);
-    if (!p) return res.status(404).json({ error: 'Producto no encontrado' });
+    if (!p || String(p.store_id) !== myStore(req)) return res.status(404).json({ error: 'Producto no encontrado' });
     const newStock = Math.max(0, +p.stock + qty);
     await updateDoc('products', req.params.id, { stock: newStock });
     res.json({ stock: newStock });
@@ -134,7 +147,7 @@ router.delete(
   adminRequired,
   h(async (req, res) => {
     const existing = await getDoc('products', req.params.id);
-    if (!existing) return res.status(404).json({ error: 'Producto no encontrado' });
+    if (!existing || String(existing.store_id) !== myStore(req)) return res.status(404).json({ error: 'Producto no encontrado' });
     await deleteDoc('products', req.params.id);
     res.json({ message: 'Producto eliminado' });
   })

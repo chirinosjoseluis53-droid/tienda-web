@@ -1,33 +1,55 @@
 import { Router } from 'express';
 import bcrypt from 'bcryptjs';
 import crypto from 'node:crypto';
-import { h, getDoc, whereEq, createDoc, setDoc, updateDoc, ts } from '../fs.js';
+import { h, getDoc, whereEq, createDoc, setDoc, updateDoc, ts, listColl } from '../fs.js';
 import { signToken, authRequired } from '../middleware/auth.js';
 
 const router = Router();
 
 function publicUser(u) {
-  return { id: u.id, name: u.name, email: u.email, role: u.role, active: u.active };
+  return { id: u.id, name: u.name, email: u.email, role: u.role, active: u.active, store_id: u.store_id != null ? String(u.store_id) : null };
+}
+
+async function withStore(u) {
+  const user = publicUser(u);
+  if (user.store_id) {
+    const store = await getDoc('stores', user.store_id);
+    user.store = store ? { id: String(store.id), name: store.name, slug: store.slug, active: store.active } : null;
+  } else {
+    user.store = null;
+  }
+  return user;
 }
 
 router.post(
   '/register',
   h(async (req, res) => {
-    const { name, email, password } = req.body || {};
+    const { name, email, password, store } = req.body || {};
     if (!name || !email || !password) {
       return res.status(400).json({ error: 'Nombre, correo y contrasena son obligatorios' });
     }
     if (password.length < 6) {
       return res.status(400).json({ error: 'La contrasena debe tener al menos 6 caracteres' });
     }
+
+    let storeId = null;
+    if (store) {
+      const found = await whereEq('stores', 'slug', String(store).trim().toLowerCase());
+      if (!found.length) return res.status(404).json({ error: 'Tienda no encontrada. Usa el enlace de acceso que genero el super administrador.' });
+      if (!found[0].active) return res.status(403).json({ error: 'La tienda esta desactivada, contacta al super administrador.' });
+      storeId = found[0].id;
+    } else {
+      return res.status(400).json({ error: 'Registro publico deshabilitado. Usa el enlace de acceso de tu tienda.' });
+    }
+
     const emailL = String(email).toLowerCase().trim();
     const existing = await whereEq('users', 'email', emailL);
     if (existing.length) return res.status(409).json({ error: 'Ya existe una cuenta con ese correo' });
 
     const hash = await bcrypt.hash(password, 10);
-    const id = await createDoc('users', { name: name.trim(), email: emailL, password_hash: hash, role: 'empleado', active: 1 });
-    const user = await getDoc('users', id);
-    res.status(201).json({ token: signToken(user), user: publicUser(user) });
+    const id = await createDoc('users', { name: name.trim(), email: emailL, password_hash: hash, role: 'empleado', active: 1, store_id: storeId });
+    const user = await withStore(await getDoc('users', id));
+    res.status(201).json({ token: signToken(user), user });
   })
 );
 
@@ -43,9 +65,14 @@ router.post(
 
     const ok = await bcrypt.compare(password, user.password_hash);
     if (!ok) return res.status(401).json({ error: 'Correo o contrasena incorrectos' });
-    if (!user.active) return res.status(403).json({ error: 'Tu cuenta esta desactivada, contacta al administrador' });
+    if (!user.active) return res.status(403).json({ error: 'Tu cuenta esta desactivada, contacta al super administrador' });
+    if (user.store_id) {
+      const store = await getDoc('stores', user.store_id);
+      if (!store || !store.active) return res.status(403).json({ error: 'Tu tienda esta desactivada, contacta al super administrador' });
+    }
 
-    res.json({ token: signToken(user), user: publicUser(user) });
+    const u = await withStore(user);
+    res.json({ token: signToken(u), user: u });
   })
 );
 
@@ -102,7 +129,7 @@ router.get(
   h(async (req, res) => {
     const user = await getDoc('users', req.user.id);
     if (!user) return res.status(404).json({ error: 'Usuario no encontrado' });
-    res.json({ user: publicUser(user) });
+    res.json({ user: await withStore(user) });
   })
 );
 
@@ -123,6 +150,38 @@ router.put(
     const hash = await bcrypt.hash(new_password, 10);
     await updateDoc('users', user.id, { password_hash: hash });
     res.json({ message: 'Contrasena actualizada' });
+  })
+);
+
+// Alias para el frontend (Profile.jsx usa PUT /api/profile)
+router.put(
+  '/',
+  authRequired,
+  h(async (req, res) => {
+    const { current_password, new_password } = req.body || {};
+    if (!current_password || !new_password) {
+      return res.status(400).json({ error: 'Contrasena actual y nueva requeridas' });
+    }
+    if (new_password.length < 6) {
+      return res.status(400).json({ error: 'La contrasena debe tener al menos 6 caracteres' });
+    }
+    const user = await getDoc('users', req.user.id);
+    const ok = await bcrypt.compare(current_password, user.password_hash);
+    if (!ok) return res.status(401).json({ error: 'La contrasena actual es incorrecta' });
+    const hash = await bcrypt.hash(new_password, 10);
+    await updateDoc('users', user.id, { password_hash: hash });
+    res.json({ message: 'Contrasena actualizada' });
+  })
+);
+
+// Info publica de una tienda por slug (para la pantalla de login/registro)
+router.get(
+  '/store/:slug',
+  h(async (req, res) => {
+    const found = await whereEq('stores', 'slug', String(req.params.slug).trim().toLowerCase());
+    const store = found[0];
+    if (!store) return res.status(404).json({ error: 'Tienda no encontrada' });
+    res.json({ id: String(store.id), name: store.name, slug: store.slug, active: !!store.active });
   })
 );
 

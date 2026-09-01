@@ -13,9 +13,29 @@ db.exec('PRAGMA journal_mode = WAL;');
 db.exec('PRAGMA foreign_keys = ON;');
 
 db.exec(`
+CREATE TABLE IF NOT EXISTS stores (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL,
+  slug TEXT NOT NULL UNIQUE,
+  active INTEGER NOT NULL DEFAULT 1,
+  created_at TEXT DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS store_settings (
+  store_id INTEGER PRIMARY KEY,
+  store_name TEXT NOT NULL DEFAULT 'Mi Minimarket',
+  currency TEXT NOT NULL DEFAULT '$',
+  tax_rate REAL NOT NULL DEFAULT 0,
+  low_stock_alert INTEGER NOT NULL DEFAULT 1,
+  initial_fund REAL NOT NULL DEFAULT 100,
+  box_open_time TEXT DEFAULT '08:00',
+  box_close_time TEXT DEFAULT '18:00'
+);
+
 CREATE TABLE IF NOT EXISTS categories (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
-  name TEXT NOT NULL UNIQUE,
+  name TEXT NOT NULL,
+  store_id INTEGER,
   created_at TEXT DEFAULT (datetime('now'))
 );
 
@@ -24,8 +44,9 @@ CREATE TABLE IF NOT EXISTS users (
   name TEXT NOT NULL,
   email TEXT NOT NULL UNIQUE,
   password_hash TEXT NOT NULL,
-  role TEXT NOT NULL DEFAULT 'empleado' CHECK (role IN ('admin', 'empleado')),
+  role TEXT NOT NULL DEFAULT 'empleado' CHECK (role IN ('superadmin', 'admin', 'empleado')),
   active INTEGER NOT NULL DEFAULT 1,
+  store_id INTEGER,
   created_at TEXT DEFAULT (datetime('now'))
 );
 
@@ -40,6 +61,7 @@ CREATE TABLE IF NOT EXISTS products (
   min_stock INTEGER NOT NULL DEFAULT 5,
   category_id INTEGER,
   image TEXT DEFAULT '',
+  store_id INTEGER,
   created_at TEXT DEFAULT (datetime('now')),
   FOREIGN KEY (category_id) REFERENCES categories(id) ON DELETE SET NULL
 );
@@ -51,6 +73,7 @@ CREATE TABLE IF NOT EXISTS clients (
   phone TEXT DEFAULT '',
   email TEXT DEFAULT '',
   address TEXT DEFAULT '',
+  store_id INTEGER,
   created_at TEXT DEFAULT (datetime('now'))
 );
 
@@ -59,6 +82,7 @@ CREATE TABLE IF NOT EXISTS sales (
   user_id INTEGER NOT NULL,
   client_id INTEGER,
   total REAL NOT NULL DEFAULT 0,
+  store_id INTEGER,
   created_at TEXT DEFAULT (datetime('now')),
   FOREIGN KEY (user_id) REFERENCES users(id),
   FOREIGN KEY (client_id) REFERENCES clients(id) ON DELETE SET NULL
@@ -98,6 +122,7 @@ CREATE TABLE IF NOT EXISTS cash_closes (
   user_id INTEGER NOT NULL,
   turn TEXT NOT NULL DEFAULT 'Matutino',
   date TEXT NOT NULL,
+  store_id INTEGER,
   system_cash REAL NOT NULL DEFAULT 0,
   system_card REAL NOT NULL DEFAULT 0,
   system_transfer REAL NOT NULL DEFAULT 0,
@@ -126,11 +151,17 @@ function ensureColumn(table, column, ddl) {
   }
 }
 ensureColumn('clients', 'cedula', "cedula TEXT DEFAULT ''");
+ensureColumn('clients', 'store_id', 'store_id INTEGER');
 ensureColumn('products', 'image', "image TEXT DEFAULT ''");
 ensureColumn('products', 'serial', "serial TEXT DEFAULT ''");
 ensureColumn('products', 'expiration_date', "expiration_date TEXT DEFAULT ''");
+ensureColumn('products', 'store_id', 'store_id INTEGER');
+ensureColumn('categories', 'store_id', 'store_id INTEGER');
 ensureColumn('sales', 'payment_method', "payment_method TEXT DEFAULT 'efectivo'");
 ensureColumn('sales', 'payment_detail', "payment_detail TEXT DEFAULT '{}'");
+ensureColumn('sales', 'store_id', 'store_id INTEGER');
+ensureColumn('cash_closes', 'store_id', 'store_id INTEGER');
+ensureColumn('users', 'store_id', 'store_id INTEGER');
 ensureColumn('settings', 'initial_fund', 'initial_fund REAL NOT NULL DEFAULT 100');
 ensureColumn('settings', 'box_open_time', "box_open_time TEXT DEFAULT '08:00'");
 ensureColumn('settings', 'box_close_time', "box_close_time TEXT DEFAULT '18:00'");

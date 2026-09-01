@@ -11,6 +11,8 @@ function clearAll() {
     DELETE FROM categories;
     DELETE FROM password_resets;
     DELETE FROM users;
+    DELETE FROM stores;
+    DELETE FROM store_settings;
     DELETE FROM sqlite_sequence;
   `);
 }
@@ -53,33 +55,43 @@ const clients = [
 async function seed() {
   clearAll();
 
-  for (const name of cats) run('INSERT INTO categories (name) VALUES (?)', [name]);
+  const superHash = await bcrypt.hash('super12345', 10);
+  run(
+    "INSERT INTO users (name, email, password_hash, role, store_id) VALUES ('Super Admin', 'super@tienda.com', ?, 'superadmin', NULL)",
+    [superHash]
+  );
+
+  run("INSERT INTO stores (name, slug) VALUES ('Tienda Demo', 'tienda-demo')");
+  const storeId = db.prepare("SELECT id FROM stores WHERE slug = 'tienda-demo'").get().id;
+  run('INSERT INTO store_settings (store_id, store_name) VALUES (?, ?)', [storeId, 'Tienda Demo']);
+
+  for (const name of cats) run('INSERT INTO categories (name, store_id) VALUES (?, ?)', [name, storeId]);
 
   for (const p of products) {
     run(
-      `INSERT INTO products (name, description, barcode, price, cost, stock, min_stock, category_id)
-       VALUES (?,?,?,?,?,?,?,?)`,
-      p
+      `INSERT INTO products (name, description, barcode, price, cost, stock, min_stock, category_id, store_id)
+       VALUES (?,?,?,?,?,?,?,?,?)`,
+      [...p, storeId]
     );
   }
 
   const adminHash = await bcrypt.hash('admin123', 10);
   const empHash = await bcrypt.hash('empleado123', 10);
   run(
-    "INSERT INTO users (name, email, password_hash, role) VALUES ('Administrador', 'admin@tienda.com', ?, 'admin')",
-    [adminHash]
+    "INSERT INTO users (name, email, password_hash, role, store_id) VALUES ('Administrador', 'admin@tienda.com', ?, 'admin', ?)",
+    [adminHash, storeId]
   );
   run(
-    "INSERT INTO users (name, email, password_hash, role) VALUES ('Empleado Demo', 'empleado@tienda.com', ?, 'empleado')",
-    [empHash]
+    "INSERT INTO users (name, email, password_hash, role, store_id) VALUES ('Empleado Demo', 'empleado@tienda.com', ?, 'empleado', ?)",
+    [empHash, storeId]
   );
   run(
-    "INSERT INTO users (name, email, password_hash, role) VALUES ('Empleado 2', 'pedro@tienda.com', ?, 'empleado')",
-    [empHash]
+    "INSERT INTO users (name, email, password_hash, role, store_id) VALUES ('Empleado 2', 'pedro@tienda.com', ?, 'empleado', ?)",
+    [empHash, storeId]
   );
 
   for (const c of clients) {
-    run('INSERT INTO clients (name, cedula, phone, email, address) VALUES (?,?,?,?,?)', c);
+    run('INSERT INTO clients (name, cedula, phone, email, address, store_id) VALUES (?,?,?,?,?,?)', [...c, storeId]);
   }
 
   const prods = db.prepare('SELECT id, price FROM products').all();
@@ -117,8 +129,8 @@ async function seed() {
           transfer: method === 'transferencia' ? total : 0,
         };
         run(
-          `INSERT INTO sales (id, user_id, client_id, total, payment_method, payment_detail, created_at) VALUES (?,?,?,?,?,?,?)`,
-          [saleCounter, emp.id, client, total, method, JSON.stringify(detail), dateStr]
+          `INSERT INTO sales (id, user_id, client_id, total, payment_method, payment_detail, store_id, created_at) VALUES (?,?,?,?,?,?,?,?)`,
+          [saleCounter, emp.id, client, total, method, JSON.stringify(detail), storeId, dateStr]
         );
         for (const it of items) {
           run(
@@ -139,9 +151,7 @@ async function seed() {
     }
   }
 
-  // Cierres de caja historicos (dias con ventas ya generadas, para el historial).
-  // Se omite el dia de hoy para que la caja inicie abierta.
-  const fund = Number(db.prepare('SELECT initial_fund FROM settings WHERE id = 1').get().initial_fund) || 100;
+  const fund = 100;
   const keys = [...dayTotals.keys()];
   const closeDays = [keyFor(keys, 1), keyFor(keys, 3), keyFor(keys, 5)].filter(Boolean);
   for (const dayKey of closeDays) {
@@ -150,11 +160,11 @@ async function seed() {
     const sysTotal = +(totals.cash + totals.card + totals.transfer + fund).toFixed(2);
     run(
       `INSERT INTO cash_closes
-         (user_id, turn, date, system_cash, system_card, system_transfer, system_initial_fund, system_total,
+         (user_id, turn, date, store_id, system_cash, system_card, system_transfer, system_initial_fund, system_total,
           declared_cash, declared_card, declared_transfer, declared_initial_fund, declared_total, difference, explanation)
-       VALUES (?,?,?, ?,?,?,?,?, ?,?,?,?,?, ?,?)`,
+       VALUES (?,?,?,?, ?,?,?,?,?, ?,?,?,?,?, ?,?)`,
       [
-        emp.id, 'Matutino (08:00 - 13:00)', dayKey,
+        emp.id, 'Matutino (08:00 - 13:00)', dayKey, storeId,
         +totals.cash.toFixed(2), +totals.card.toFixed(2), +totals.transfer.toFixed(2), fund, sysTotal,
         +totals.cash.toFixed(2), +totals.card.toFixed(2), +totals.transfer.toFixed(2), fund, sysTotal,
         0, 'Cierre normal, caja cuadrada',
@@ -163,8 +173,9 @@ async function seed() {
   }
 
   console.log('Base de datos inicializada correctamente.');
-  console.log('  Admin:    admin@tienda.com / admin123');
-  console.log('  Empleado: empleado@tienda.com / empleado123');
+  console.log('  Super Admin: super@tienda.com / super12345');
+  console.log('  Admin:       admin@tienda.com / admin123');
+  console.log('  Empleado:    empleado@tienda.com / empleado123');
 }
 
 // Devuelve el dayKey que corresponde a la i-esima fecha unica de ventas (0 = mas reciente con ventas)

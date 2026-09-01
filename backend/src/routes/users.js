@@ -1,22 +1,24 @@
 import { Router } from 'express';
 import bcrypt from 'bcryptjs';
-import { h, listColl, listSub, getDoc, createDoc, updateDoc, deleteDoc, whereEq } from '../fs.js';
+import { h, listColl, getDoc, createDoc, updateDoc, deleteDoc, whereEq } from '../fs.js';
 import { authRequired, adminRequired } from '../middleware/auth.js';
 
 const router = Router();
+const myStore = (req) => String(req.user.store_id);
 
-const PUBLIC = (u) => ({ id: u.id, name: u.name, email: u.email, role: u.role, active: u.active, created_at: u.created_at });
+const PUBLIC = (u) => ({ id: u.id, name: u.name, email: u.email, role: u.role, active: u.active, created_at: u.created_at, store_id: u.store_id != null ? String(u.store_id) : null });
 
 router.use(authRequired, adminRequired);
 
 router.get(
   '/',
-  h(async (_req, res) => {
-    const users = await listColl('users');
+  h(async (req, res) => {
+    const sid = myStore(req);
+    const users = (await listColl('users')).filter((u) => String(u.store_id) === sid);
+    const sales = (await listColl('sales')).filter((s) => String(s.store_id) === sid);
     const out = [];
     for (const u of users) {
-      const sales = await listColl('sales');
-      const us = sales.filter((s) => s.user_id === u.id);
+      const us = sales.filter((s) => String(s.user_id) === String(u.id));
       out.push({ ...PUBLIC(u), sales_count: us.length, sales_total: +us.reduce((a, s) => a + (+s.total || 0), 0).toFixed(2) });
     }
     out.sort((a, b) => String(a.id).localeCompare(String(b.id), undefined, { numeric: true }));
@@ -34,7 +36,14 @@ router.post(
     const dup = await whereEq('users', 'email', emailL);
     if (dup.length) return res.status(409).json({ error: 'Ya existe un usuario con ese correo' });
     const hash = await bcrypt.hash(password, 10);
-    const id = await createDoc('users', { name: name.trim(), email: emailL, password_hash: hash, role: role === 'admin' ? 'admin' : 'empleado', active: 1 });
+    const id = await createDoc('users', {
+      name: name.trim(),
+      email: emailL,
+      password_hash: hash,
+      role: role === 'admin' ? 'admin' : 'empleado',
+      active: 1,
+      store_id: myStore(req),
+    });
     res.status(201).json(PUBLIC(await getDoc('users', id)));
   })
 );
@@ -43,9 +52,9 @@ router.put(
   '/:id',
   h(async (req, res) => {
     const user = await getDoc('users', req.params.id);
-    if (!user) return res.status(404).json({ error: 'Usuario no encontrado' });
+    if (!user || String(user.store_id) !== myStore(req)) return res.status(404).json({ error: 'Usuario no encontrado' });
     const { name, role, active, password } = req.body || {};
-    if (req.params.id === '1') {
+    if (String(user.id) === '1') {
       return res.status(400).json({ error: 'El administrador principal no puede modificarse' });
     }
     if (user.role === 'admin' && String(req.user.id) === String(user.id)) {
@@ -70,8 +79,14 @@ router.delete(
   '/:id',
   h(async (req, res) => {
     const user = await getDoc('users', req.params.id);
-    if (!user) return res.status(404).json({ error: 'Usuario no encontrado' });
-    if (user.role === 'admin' && String(user.id) === String(req.user.id)) {
+    if (!user || String(user.store_id) !== myStore(req)) return res.status(404).json({ error: 'Usuario no encontrado' });
+    if (String(user.id) === '1') {
+      return res.status(400).json({ error: 'El administrador principal no puede eliminarse' });
+    }
+    if (user.role === 'superadmin') {
+      return res.status(400).json({ error: 'No puedes eliminar al super administrador' });
+    }
+    if (user.role === 'admin' && String(req.user.id) === String(user.id)) {
       return res.status(400).json({ error: 'No puedes eliminarte a ti mismo' });
     }
     if (user.role === 'admin') {

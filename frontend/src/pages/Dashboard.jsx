@@ -53,7 +53,7 @@ export default function Dashboard() {
   const cards = [
     { label: 'Ventas de hoy',    value: fmtMoney(data.todaySales.total, cur), sub: `${data.todaySales.count} transacciones`, icon: '🛍️', color: '#16a34a' },
     { label: data.isAdmin ? 'Ventas totales' : 'Mis ventas totales', value: fmtMoney(data.totalSales.total, cur), sub: `${data.totalSales.count} transacciones`, icon: '💰', color: '#2563eb' },
-    { label: 'Valor inventario', value: fmtMoney(data.inventory.value, cur), sub: 'Costo en bodega', icon: '📦', color: '#7c3aed' },
+    { label: 'Valor inventario', value: fmtMoney(data.inventory, cur), sub: 'Costo en bodega', icon: '📦', color: '#7c3aed' },
     { label: 'Stock bajo',       value: data.lowStock.length, sub: 'Productos por reabastecer', icon: '⚠️', color: '#dc2626' },
   ];
 

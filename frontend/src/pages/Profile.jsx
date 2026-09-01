@@ -21,7 +21,7 @@ export default function Profile() {
     }
     setSaving(true);
     try {
-      await api.put('/profile', {
+      await api.put('/auth/password', {
         current_password: form.current_password,
         new_password: form.new_password,
       });

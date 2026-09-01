@@ -1,4 +1,4 @@
-import { Routes, Route, Navigate } from 'react-router-dom';
+import { Routes, Route, Navigate, useLocation } from 'react-router-dom';
 import { useAuth } from './AuthContext.jsx';
 import Layout from './components/Layout.jsx';
 import Login from './pages/Login.jsx';
@@ -15,6 +15,7 @@ import Employees from './pages/Employees.jsx';
 import Settings from './pages/Settings.jsx';
 import Profile from './pages/Profile.jsx';
 import CashClose from './pages/CashClose.jsx';
+import SuperAdmin from './pages/SuperAdmin.jsx';
 
 function FullLoader() {
   return (
@@ -25,10 +26,16 @@ function FullLoader() {
   );
 }
 
+function roleHome(user) {
+  return user?.role === 'superadmin' ? '/superadmin' : '/';
+}
+
 function Protected({ children }) {
   const { user, ready } = useAuth();
   if (!ready) return <FullLoader />;
-  if (!user) return <Navigate to="/login" replace />;
+  if (!user) {
+    return <Navigate to={'/login' + window.location.search} replace />;
+  }
   return children;
 }
 
@@ -38,11 +45,23 @@ function AdminOnly({ children }) {
   return children;
 }
 
+function SuperOnly({ children }) {
+  const { user } = useAuth();
+  if (user.role !== 'superadmin') return <Navigate to="/" replace />;
+  return children;
+}
+
 function GuestOnly({ children }) {
   const { user, ready } = useAuth();
   if (!ready) return <FullLoader />;
-  if (user) return <Navigate to="/" replace />;
+  if (user) return <Navigate to={roleHome(user)} replace />;
   return children;
+}
+
+function RoleHome() {
+  const { user } = useAuth();
+  if (user?.role === 'superadmin') return <Navigate to="/superadmin" replace />;
+  return <Dashboard />;
 }
 
 export default function App() {
@@ -53,7 +72,8 @@ export default function App() {
       <Route path="/forgot-password" element={<GuestOnly><ForgotPassword /></GuestOnly>} />
       <Route path="/reset-password" element={<ResetPassword />} />
       <Route path="/" element={<Protected><Layout /></Protected>}>
-        <Route index element={<Dashboard />} />
+        <Route index element={<RoleHome />} />
+        <Route path="superadmin" element={<SuperOnly><SuperAdmin /></SuperOnly>} />
         <Route path="pos" element={<POS />} />
         <Route path="sales" element={<Sales />} />
         <Route path="products" element={<Products />} />

@@ -3,14 +3,16 @@ import { h, listColl, getDoc, createDoc, deleteDoc, whereEq } from '../fs.js';
 import { authRequired } from '../middleware/auth.js';
 
 const router = Router();
+const myStore = (req) => String(req.user.store_id);
 
 function todayStr() {
   return new Date().toISOString().slice(0, 10);
 }
 
 function scopeRows(req, rows) {
-  if (req.user.role === 'admin') return rows;
-  return rows.filter((r) => String(r.user_id) === String(req.user.id));
+  const sid = myStore(req);
+  if (req.user.role === 'admin') return rows.filter((r) => String(r.store_id) === sid);
+  return rows.filter((r) => String(r.store_id) === sid && String(r.user_id) === String(req.user.id));
 }
 
 function parseDetail(detail) {
@@ -51,13 +53,14 @@ function summarise(salesRows, initialFund) {
   return out;
 }
 
-async function initialFund() {
-  const s = await getDoc('settings', 'main');
+async function initialFund(req) {
+  const s = await getDoc('store_settings', String(req.user.store_id));
   return Number(s?.initial_fund) || 0;
 }
 
 async function todayRows(req) {
-  const all = await listColl('sales');
+  const sid = myStore(req);
+  const all = (await listColl('sales')).filter((s) => String(s.store_id) === sid);
   return scopeRows(req, all.filter((s) => s.created_at.slice(0, 10) === todayStr()));
 }
 
@@ -65,7 +68,7 @@ router.get(
   '/',
   authRequired,
   h(async (req, res) => {
-    const closes = await listColl('cash_closes');
+    const closes = (await listColl('cash_closes')).filter((c) => String(c.store_id) === myStore(req));
     const scoped = scopeRows(req, closes).sort((a, b) => (a.date > b.date ? -1 : a.date < b.date ? 1 : a.id > b.id ? -1 : 1));
     const users = Object.fromEntries((await listColl('users')).map((u) => [String(u.id), u]));
     res.json(scoped.slice(0, 60).map((c) => ({ ...c, user_name: users[c.user_id]?.name || '?' })));
@@ -76,7 +79,7 @@ router.get(
   '/today-summary',
   authRequired,
   h(async (req, res) => {
-    res.json(summarise(await todayRows(req), await initialFund()));
+    res.json(summarise(await todayRows(req), await initialFund(req)));
   })
 );
 
@@ -103,14 +106,14 @@ router.post(
     } = req.body || {};
 
     const today = todayStr();
-    const existing = (await whereEq('cash_closes', 'date', today)).find(
-      (c) => String(c.user_id) === String(req.user.id) && c.turn === turn
-    );
+    const existing = (await whereEq('cash_closes', 'date', today))
+      .filter((c) => String(c.store_id) === myStore(req))
+      .find((c) => String(c.user_id) === String(req.user.id) && c.turn === turn);
     if (existing) {
       return res.status(409).json({ error: 'Ya existe un cierre de caja para este turno de hoy.' });
     }
 
-    const sys = summarise(await todayRows(req), await initialFund());
+    const sys = summarise(await todayRows(req), await initialFund(req));
     const fund = Number(declared_initial_fund);
     const declCash = +Number(declared_cash).toFixed(2);
     const declCard = +Number(declared_card).toFixed(2);
@@ -125,6 +128,7 @@ router.post(
       user_id: req.user.id,
       turn,
       date: today,
+      store_id: myStore(req),
       system_cash: sys.cash, system_card: sys.card, system_transfer: sys.transfer, system_initial_fund: sys.initial_fund, system_total: sysTotal,
       declared_cash: declCash, declared_card: declCard, declared_transfer: declTransfer, declared_initial_fund: declFund, declared_total: declTotal,
       difference,
@@ -143,7 +147,7 @@ router.delete(
       return res.status(403).json({ error: 'Solo administradores pueden reabrir la caja' });
     }
     const existing = await getDoc('cash_closes', req.params.id);
-    if (!existing) return res.status(404).json({ error: 'Cierre no encontrado' });
+    if (!existing || String(existing.store_id) !== myStore(req)) return res.status(404).json({ error: 'Cierre no encontrado' });
     await deleteDoc('cash_closes', req.params.id);
     res.json({ message: 'Caja reabierta correctamente', id: req.params.id });
   })
@@ -154,7 +158,7 @@ router.get(
   authRequired,
   h(async (req, res) => {
     const row = await getDoc('cash_closes', req.params.id);
-    if (!row) return res.status(404).json({ error: 'Cierre no encontrado' });
+    if (!row || String(row.store_id) !== myStore(req)) return res.status(404).json({ error: 'Cierre no encontrado' });
     if (req.user.role !== 'admin' && String(row.user_id) !== String(req.user.id)) {
       return res.status(403).json({ error: 'Sin acceso' });
     }

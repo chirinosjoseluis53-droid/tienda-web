@@ -3,19 +3,23 @@ import { h, listColl, listSub, getDoc, createDoc, updateDoc, deleteDoc, whereEq 
 import { authRequired, adminRequired } from '../middleware/auth.js';
 
 const router = Router();
+const myStore = (req) => String(req.user.store_id);
+
+const myClients = async (req) => (await listColl('clients')).filter((c) => String(c.store_id) === myStore(req));
 
 router.get(
   '/',
   authRequired,
   h(async (req, res) => {
     if (req.query.cedula) {
-      const matches = await whereEq('clients', 'cedula', String(req.query.cedula).trim());
+      const cedula = String(req.query.cedula).trim();
+      const matches = (await whereEq('clients', 'cedula', cedula)).filter((c) => String(c.store_id) === myStore(req));
       return res.json(matches.map((c) => ({ ...c, total_purchases: 0, total_spent: 0 })));
     }
-    const clients = await listColl('clients');
+    const clients = await myClients(req);
     const rows = [];
     for (const c of clients) {
-      const sales = await listSub('clients', c.id, 'sales');
+      const sales = (await listSub('clients', c.id, 'sales')).filter((s) => String(s.store_id) === myStore(req));
       const total_spent = sales.reduce((a, s) => a + (+s.total || 0), 0);
       rows.push({ ...c, total_purchases: sales.length, total_spent: +total_spent.toFixed(2) });
     }
@@ -30,7 +34,7 @@ router.get(
   authRequired,
   h(async (req, res) => {
     const c = await getDoc('clients', req.params.id);
-    if (!c) return res.status(404).json({ error: 'Cliente no encontrado' });
+    if (!c || String(c.store_id) !== myStore(req)) return res.status(404).json({ error: 'Cliente no encontrado' });
     res.json(c);
   })
 );
@@ -43,7 +47,7 @@ router.post(
     const cedula = (req.body?.cedula || '').trim();
     if (!name) return res.status(400).json({ error: 'El nombre es obligatorio' });
     if (cedula) {
-      const dup = await whereEq('clients', 'cedula', cedula);
+      const dup = (await whereEq('clients', 'cedula', cedula)).filter((c) => String(c.store_id) === myStore(req));
       if (dup.length) return res.status(409).json({ error: 'Ya existe un cliente con esa cedula' });
     }
     const id = await createDoc('clients', {
@@ -52,6 +56,7 @@ router.post(
       phone: (req.body.phone || '').trim(),
       email: (req.body.email || '').trim(),
       address: (req.body.address || '').trim(),
+      store_id: myStore(req),
     });
     res.status(201).json(await getDoc('clients', id));
   })
@@ -65,10 +70,10 @@ router.put(
     const cedula = (req.body?.cedula || '').trim();
     if (!name) return res.status(400).json({ error: 'El nombre es obligatorio' });
     const existing = await getDoc('clients', req.params.id);
-    if (!existing) return res.status(404).json({ error: 'Cliente no encontrado' });
+    if (!existing || String(existing.store_id) !== myStore(req)) return res.status(404).json({ error: 'Cliente no encontrado' });
     if (cedula) {
-      const dup = await whereEq('clients', 'cedula', cedula);
-      if (dup.some((d) => d.id !== req.params.id)) return res.status(409).json({ error: 'Ya existe un cliente con esa cedula' });
+      const dup = (await whereEq('clients', 'cedula', cedula)).filter((c) => String(c.store_id) === myStore(req) && String(c.id) !== String(req.params.id));
+      if (dup.length) return res.status(409).json({ error: 'Ya existe un cliente con esa cedula' });
     }
     await updateDoc('clients', req.params.id, {
       name,
@@ -87,7 +92,7 @@ router.delete(
   adminRequired,
   h(async (req, res) => {
     const existing = await getDoc('clients', req.params.id);
-    if (!existing) return res.status(404).json({ error: 'Cliente no encontrado' });
+    if (!existing || String(existing.store_id) !== myStore(req)) return res.status(404).json({ error: 'Cliente no encontrado' });
     await deleteDoc('clients', req.params.id);
     res.json({ message: 'Cliente eliminado' });
   })

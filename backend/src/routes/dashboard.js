@@ -3,6 +3,7 @@ import { h, listColl, listSub, getDoc, categoryMap } from '../fs.js';
 import { authRequired } from '../middleware/auth.js';
 
 const router = Router();
+const myStore = (req) => String(req.user.store_id);
 
 function localDate(d) {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
@@ -26,20 +27,21 @@ router.get(
   '/',
   authRequired,
   h(async (req, res) => {
+    const sid = myStore(req);
     const isAdmin = req.user.role === 'admin';
     const { today, todayStart, todayEnd, from30Str, from13Str } = todayRange();
 
-    let sales = await listColl('sales');
-    if (!isAdmin) sales = sales.filter((s) => s.user_id === req.user.id);
+    let sales = (await listColl('sales')).filter((s) => String(s.store_id) === sid);
+    if (!isAdmin) sales = sales.filter((s) => String(s.user_id) === String(req.user.id));
 
     const totalSales = { count: sales.length, total: +sales.reduce((a, s) => a + (+s.total || 0), 0).toFixed(2) };
     const todayRows = sales.filter((s) => s.created_at >= todayStart && s.created_at < todayEnd);
     const todaySales = { count: todayRows.length, total: +todayRows.reduce((a, s) => a + (+s.total || 0), 0).toFixed(2) };
 
-    const allProducts = await listColl('products');
+    const allProducts = (await listColl('products')).filter((p) => String(p.store_id) === sid);
     const lowStock = allProducts.filter((p) => +p.stock <= +p.min_stock).sort((a, b) => a.stock - b.stock).slice(0, 10);
     const inventory = +allProducts.reduce((a, p) => a + (+p.cost || 0) * (+p.stock || 0), 0).toFixed(2);
-    const clientCount = (await listColl('clients')).length;
+    const clientCount = (await listColl('clients')).filter((c) => String(c.store_id) === sid).length;
 
     const last13 = sales.filter((s) => s.created_at >= from13Str && s.created_at < todayEnd);
     const dailyMap = {};
