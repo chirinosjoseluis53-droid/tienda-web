@@ -16,6 +16,7 @@ import Settings from './pages/Settings.jsx';
 import Profile from './pages/Profile.jsx';
 import CashClose from './pages/CashClose.jsx';
 import SuperAdmin from './pages/SuperAdmin.jsx';
+import Reports from './pages/Reports.jsx';
 
 function FullLoader() {
   return (
@@ -80,6 +81,7 @@ export default function App() {
         <Route path="categories" element={<AdminOnly><Categories /></AdminOnly>} />
         <Route path="clients" element={<Clients />} />
         <Route path="employees" element={<AdminOnly><Employees /></AdminOnly>} />
+        <Route path="reports" element={<AdminOnly><Reports /></AdminOnly>} />
         <Route path="settings" element={<AdminOnly><Settings /></AdminOnly>} />
         <Route path="profile" element={<Profile />} />
         <Route path="cash-close" element={<CashClose />} />

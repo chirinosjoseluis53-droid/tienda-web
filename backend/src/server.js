@@ -13,6 +13,7 @@ import userRoutes from './routes/users.js';
 import settingRoutes from './routes/settings.js';
 import cashCloseRoutes from './routes/cash_closes.js';
 import superRoutes from './routes/super.js';
+import reportRoutes from './routes/reports.js';
 import { get } from './db.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -34,6 +35,7 @@ app.use('/api/users', userRoutes);
 app.use('/api/settings', settingRoutes);
 app.use('/api/cash-closes', cashCloseRoutes);
 app.use('/api/super', superRoutes);
+app.use('/api/reports', reportRoutes);
 
 if (existsSync(DIST_DIR)) {
   app.use(express.static(DIST_DIR));

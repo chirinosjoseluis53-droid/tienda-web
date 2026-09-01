@@ -16,6 +16,7 @@ const MENU_ITEMS_ADMIN = [
   { to: '/categories',  label: 'Categorias',       icon: '🗂️' },
   { to: '/clients',     label: 'Clientes',         icon: '👥' },
   { to: '/employees',   label: 'Empleados',        icon: '👤' },
+  { to: '/reports',     label: 'Reportes',         icon: '📄' },
   { to: '/settings',    label: 'Configuracion',    icon: '⚙️' },
   { to: '/cash-close',  label: 'Cierre de Caja',   icon: '🔒' },
   { to: '/profile',     label: 'Mi perfil',        icon: '🪪' },
